@@ -1,0 +1,31 @@
+{
+  "events": [
+    {
+      "timestamp": "2026-10-12T12:00:00Z",
+      "source": "dummy_sensor",
+      "synthetic": true,
+      "event_type": "process_start",
+      "process_id": 1234,
+      "process_name": "python"
+    },
+    {
+      "timestamp": "2026-10-12T12:00:01Z",
+      "source": "dummy_sensor",
+      "synthetic": true,
+      "event_type": "file_access",
+      "process_id": 1234,
+      "process_name": "python",
+      "file_path": "/tmp/example.txt"
+    },
+    {
+      "timestamp": "2026-10-12T12:00:02Z",
+      "source": "dummy_sensor",
+      "synthetic": true,
+      "event_type": "network_connection",
+      "process_id": 1234,
+      "process_name": "python",
+      "destination_ip": "192.0.2.10",
+      "destination_port": 443
+    }
+  ]
+}
