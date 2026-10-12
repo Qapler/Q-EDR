@@ -1,0 +1,27 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+#
+# One pristine Windows 11 VM, managed by Vagrant + VirtualBox.
+# Normally driven by spinup.sh / spinup.ps1, but a plain `vagrant up` works too.
+
+Vagrant.configure("2") do |config|
+  # Base image: Windows 11 25H2 (Enterprise on x86-64 hosts, Pro on Apple-silicon Macs).
+  config.vm.box              = "gusztavvargadr/windows-11"
+  config.vm.box_check_update = false        # reuse the cached box; don't phone home on every run
+
+  # Windows guests are driven over WinRM (login vagrant/vagrant is baked into the box).
+  config.vm.guest        = :windows
+  config.vm.communicator = "winrm"
+  config.vm.boot_timeout = 1200             # first boot of a sysprepped image is slow: allow 20 min
+
+  # Keep the guest sealed off from the host: no shared folder.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.name         = "win11-pristine"
+    vb.gui          = ENV["HEADLESS"] != "1"  # open the VM window unless HEADLESS=1
+    vb.memory       = 4096                    # Windows 11 minimum: 4 GB RAM, 2 CPUs
+    vb.cpus         = 2
+    vb.linked_clone = true                    # import the box once; every new VM is a thin clone
+  end
+end
