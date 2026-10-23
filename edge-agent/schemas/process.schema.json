@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Qapler/Q-EDR/schemas/process.schema.json",
+  "title": "Q-EDR Process Telemetry Payloads",
+  "description": "Schemas for process category event payloads (process.exec, process.fork, process.exit, process.snapshot).",
+  "definitions": {
+    "process_exec": {
+      "type": "object",
+      "required": ["filename"],
+      "properties": {
+        "filename": { "type": "string", "description": "Binary or script path being executed." },
+        "argv": { "type": "array", "items": { "type": "string" }, "description": "Arguments passed to execve." },
+        "envp": { "type": "array", "items": { "type": "string" }, "description": "Environment variables (if enabled)." },
+        "ret_code": { "type": "integer", "description": "Return code from sys_execve (0 on success)." }
+      },
+      "additionalProperties": false
+    },
+    "process_fork": {
+      "type": "object",
+      "required": ["child_pid", "child_entity_id"],
+      "properties": {
+        "child_pid": { "type": "integer", "description": "PID of the newly created child process." },
+        "child_tid": { "type": "integer", "description": "TID of the child thread/process." },
+        "child_comm": { "type": "string", "maxLength": 16, "description": "Comm name inherited by the child." },
+        "child_entity_id": { "type": "string", "description": "Entity ID generated for the child process." },
+        "clone_flags": { "type": "integer", "description": "Flags passed to clone/clone3 syscall." },
+        "clone_flags_desc": { "type": "string", "description": "Decoded clone flags." }
+      },
+      "additionalProperties": false
+    },
+    "process_exit": {
+      "type": "object",
+      "required": ["exit_code"],
+      "properties": {
+        "exit_code": { "type": "integer", "description": "Exit status code returned to parent." },
+        "signal": { "type": "integer", "description": "Signal number if killed by a signal." },
+        "signal_desc": { "type": "string", "description": "Name of terminating signal (e.g. SIGKILL, SIGSEGV)." },
+        "duration_ns": { "type": "integer", "description": "Lifetime of the process in nanoseconds." }
+      },
+      "additionalProperties": false
+    },
+    "process_snapshot": {
+      "type": "object",
+      "required": ["state", "state_desc", "threads"],
+      "properties": {
+        "state": { "type": "string", "description": "Process state code (R, S, D, Z, T, etc.)." },
+        "state_desc": { "type": "string", "description": "Human-readable state description." },
+        "threads": { "type": "integer", "description": "Total active threads in thread group." },
+        "vm_size_kb": { "type": "integer", "description": "Virtual memory size in KiB." },
+        "vm_rss_kb": { "type": "integer", "description": "Resident set size in KiB." },
+        "open_fds": { "type": "integer", "description": "Count of currently open file descriptors." },
+        "cmdline": { "type": "array", "items": { "type": "string" } },
+        "cgroup_path": { "type": "string" },
+        "session_id": { "type": "integer" },
+        "tty": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

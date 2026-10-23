@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Qapler/Q-EDR/schemas/network.schema.json",
+  "title": "Q-EDR Network Telemetry Payloads",
+  "description": "Schemas for network category event payloads (network.connect, network.accept, network.bind, network.close, network.snapshot).",
+  "definitions": {
+    "network_connect": {
+      "type": "object",
+      "required": ["family", "protocol", "direction", "local_addr", "local_port", "remote_addr", "remote_port"],
+      "properties": {
+        "family": { "type": "string", "enum": ["ipv4", "ipv6", "unix"] },
+        "protocol": { "type": "string", "enum": ["tcp", "udp", "raw"] },
+        "direction": { "type": "string", "enum": ["outbound"] },
+        "local_addr": { "type": "string" },
+        "local_port": { "type": "integer" },
+        "remote_addr": { "type": "string" },
+        "remote_port": { "type": "integer" },
+        "ret_code": { "type": "integer" },
+        "socket_fd": { "type": "integer" },
+        "hostname": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "network_accept": {
+      "type": "object",
+      "required": ["family", "protocol", "direction", "local_addr", "local_port", "remote_addr", "remote_port"],
+      "properties": {
+        "family": { "type": "string", "enum": ["ipv4", "ipv6", "unix"] },
+        "protocol": { "type": "string", "enum": ["tcp", "udp", "raw"] },
+        "direction": { "type": "string", "enum": ["inbound"] },
+        "local_addr": { "type": "string" },
+        "local_port": { "type": "integer" },
+        "remote_addr": { "type": "string" },
+        "remote_port": { "type": "integer" },
+        "new_fd": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "network_bind": {
+      "type": "object",
+      "required": ["family", "protocol", "addr", "port"],
+      "properties": {
+        "family": { "type": "string", "enum": ["ipv4", "ipv6", "unix"] },
+        "protocol": { "type": "string", "enum": ["tcp", "udp", "raw"] },
+        "addr": { "type": "string" },
+        "port": { "type": "integer" },
+        "ret_code": { "type": "integer" },
+        "socket_fd": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "network_close": {
+      "type": "object",
+      "required": ["family", "protocol", "local_addr", "local_port", "remote_addr", "remote_port", "old_state", "new_state"],
+      "properties": {
+        "family": { "type": "string", "enum": ["ipv4", "ipv6", "unix"] },
+        "protocol": { "type": "string", "enum": ["tcp", "udp", "raw"] },
+        "local_addr": { "type": "string" },
+        "local_port": { "type": "integer" },
+        "remote_addr": { "type": "string" },
+        "remote_port": { "type": "integer" },
+        "old_state": { "type": "string" },
+        "new_state": { "type": "string" },
+        "duration_ns": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "network_snapshot": {
+      "type": "object",
+      "required": ["family", "protocol", "local_addr", "local_port", "state"],
+      "properties": {
+        "family": { "type": "string", "enum": ["ipv4", "ipv6", "unix"] },
+        "protocol": { "type": "string", "enum": ["tcp", "udp", "raw"] },
+        "local_addr": { "type": "string" },
+        "local_port": { "type": "integer" },
+        "remote_addr": { "type": "string" },
+        "remote_port": { "type": "integer" },
+        "state": { "type": "string" },
+        "inode": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
