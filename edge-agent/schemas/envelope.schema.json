@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Qapler/Q-EDR/schemas/envelope.schema.json",
+  "title": "Q-EDR Common Event Envelope",
+  "description": "Standardized, database-independent envelope schema for all Q-EDR Linux endpoint telemetry events.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "observed_time",
+    "collection_mode",
+    "host",
+    "source",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "SemVer of the envelope schema format.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique UUID v4 identifying this event instance."
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Hierarchical category.operation identifier (e.g. process.exec, network.connect).",
+      "pattern": "^(process|network|ipc|filesystem)\\.[a-z0-9_]+$"
+    },
+    "event_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the event occurred in the kernel, converted to UTC ISO 8601."
+    },
+    "observed_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the collector processed the event in UTC ISO 8601."
+    },
+    "collection_mode": {
+      "type": "string",
+      "enum": ["event", "snapshot"],
+      "description": "Distinguishes real-time event-driven telemetry from point-in-time state inventory."
+    },
+    "host": {
+      "type": "object",
+      "required": ["host_id", "hostname", "boot_id", "os", "architecture", "kernel_release"],
+      "properties": {
+        "host_id": { "type": "string", "description": "Persistent machine identity (from /etc/machine-id)." },
+        "hostname": { "type": "string", "description": "System hostname." },
+        "boot_id": { "type": "string", "description": "Unique boot UUID (/proc/sys/kernel/random/boot_id)." },
+        "os": { "type": "string", "description": "Operating system name (e.g. linux)." },
+        "architecture": { "type": "string", "description": "CPU architecture (e.g. x86_64, aarch64)." },
+        "kernel_release": { "type": "string", "description": "Kernel version release string." }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["collector", "collector_version", "mechanism"],
+      "properties": {
+        "collector": { "type": "string", "description": "Name of the agent binary." },
+        "collector_version": { "type": "string", "description": "Agent version string." },
+        "mechanism": { "type": "string", "enum": ["ebpf", "tracepoint", "proc", "netlink", "sysfs"] },
+        "probe": { "type": "string", "description": "Specific hook, tracepoint, or file queried." }
+      },
+      "additionalProperties": false
+    },
+    "actor": {
+      "type": "object",
+      "required": ["pid", "uid", "gid", "comm", "process_entity_id"],
+      "properties": {
+        "pid": { "type": "integer", "description": "Process ID in the root PID namespace." },
+        "tid": { "type": "integer", "description": "Thread ID." },
+        "ppid": { "type": "integer", "description": "Parent Process ID." },
+        "uid": { "type": "integer", "description": "Real User ID." },
+        "gid": { "type": "integer", "description": "Real Group ID." },
+        "euid": { "type": "integer", "description": "Effective User ID." },
+        "egid": { "type": "integer", "description": "Effective Group ID." },
+        "comm": { "type": "string", "maxLength": 16, "description": "Process short name from task_struct." },
+        "exe": { "type": "string", "description": "Absolute executable path from /proc/[pid]/exe." },
+        "cmdline": { "type": "array", "items": { "type": "string" }, "description": "Command-line argument tokens." },
+        "process_start_time_ns": { "type": "integer", "description": "Process start time in nanoseconds since boot." },
+        "process_entity_id": { "type": "string", "description": "Deterministic SHA-256 entity ID (boot_id:pid:start_time)." },
+        "parent_comm": { "type": "string" },
+        "parent_exe": { "type": "string" },
+        "parent_entity_id": { "type": "string" },
+        "namespace_ids": {
+          "type": "object",
+          "properties": {
+            "pid_ns": { "type": "integer" },
+            "mnt_ns": { "type": "integer" },
+            "net_ns": { "type": "integer" },
+            "user_ns": { "type": "integer" },
+            "ipc_ns": { "type": "integer" },
+            "uts_ns": { "type": "integer" },
+            "cgroup_ns": { "type": "integer" }
+          }
+        },
+        "cgroup_path": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "data": {
+      "type": "object",
+      "description": "Category-specific telemetry payload defined in category schema files."
+    },
+    "quality": {
+      "type": "object",
+      "properties": {
+        "events_dropped": { "type": "integer" },
+        "incomplete": { "type": "boolean" },
+        "incomplete_reason": { "type": "string" },
+        "timestamp_source": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

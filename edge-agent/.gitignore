@@ -1,0 +1,14 @@
+# Binaries and build outputs
+bin/
+/collector
+/q-edr-collector
+/q-edr-collector-*
+*.o
+*.so
+coverage.out
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*~

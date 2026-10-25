@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Qapler/Q-EDR/schemas/ipc.schema.json",
+  "title": "Q-EDR IPC Telemetry Payloads",
+  "description": "Schemas for IPC category event payloads (ipc.pipe_create, ipc.socketpair_create, ipc.shm_get, ipc.msg_send, ipc.sem_op, ipc.snapshot).",
+  "definitions": {
+    "ipc_pipe_create": {
+      "type": "object",
+      "required": ["read_fd", "write_fd"],
+      "properties": {
+        "read_fd": { "type": "integer", "description": "Read end file descriptor." },
+        "write_fd": { "type": "integer", "description": "Write end file descriptor." },
+        "flags": { "type": "integer", "description": "pipe2 creation flags (e.g. O_CLOEXEC, O_NONBLOCK)." },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "ipc_socketpair_create": {
+      "type": "object",
+      "required": ["family", "type", "protocol", "fd0", "fd1"],
+      "properties": {
+        "family": { "type": "string", "enum": ["unix"] },
+        "type": { "type": "string", "description": "stream, dgram, seqpacket." },
+        "protocol": { "type": "integer" },
+        "fd0": { "type": "integer" },
+        "fd1": { "type": "integer" },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "ipc_shm_get": {
+      "type": "object",
+      "required": ["key", "shm_id", "size", "shm_flg"],
+      "properties": {
+        "key": { "type": "integer", "description": "SysV IPC key." },
+        "shm_id": { "type": "integer", "description": "Allocated shared memory identifier." },
+        "size": { "type": "integer", "description": "Segment size in bytes." },
+        "shm_flg": { "type": "integer", "description": "Creation and permission flags." },
+        "flag_desc": { "type": "string" },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "ipc_msg_send": {
+      "type": "object",
+      "required": ["msg_id", "msg_type", "msg_size"],
+      "properties": {
+        "msg_id": { "type": "integer", "description": "Message queue identifier." },
+        "msg_type": { "type": "integer", "description": "Application-defined message type." },
+        "msg_size": { "type": "integer", "description": "Payload size in bytes." },
+        "msg_flg": { "type": "integer" },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "ipc_sem_op": {
+      "type": "object",
+      "required": ["sem_id", "nsops"],
+      "properties": {
+        "sem_id": { "type": "integer", "description": "Semaphore set identifier." },
+        "nsops": { "type": "integer", "description": "Number of operations in the array." },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "ipc_snapshot": {
+      "type": "object",
+      "required": ["resource_type", "key", "id", "owner_uid", "permissions"],
+      "properties": {
+        "resource_type": { "type": "string", "enum": ["shm", "msg", "sem"] },
+        "key": { "type": "integer" },
+        "id": { "type": "integer" },
+        "owner_uid": { "type": "integer" },
+        "permissions": { "type": "integer" },
+        "size": { "type": "integer" },
+        "last_op_time": { "type": "integer" },
+        "num_attach": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

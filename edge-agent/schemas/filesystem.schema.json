@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Qapler/Q-EDR/schemas/filesystem.schema.json",
+  "title": "Q-EDR Filesystem Telemetry Payloads",
+  "description": "Schemas for filesystem category event payloads (filesystem.open, filesystem.create, filesystem.write, filesystem.rename, filesystem.unlink, filesystem.mkdir, filesystem.chmod, filesystem.chown, filesystem.snapshot).",
+  "definitions": {
+    "filesystem_open": {
+      "type": "object",
+      "required": ["flags"],
+      "properties": {
+        "path": { "type": "string", "description": "Resolved target path." },
+        "path_error": { "type": "string" },
+        "flags": { "type": "integer", "description": "File access flags (O_RDONLY, O_WRONLY, etc.)." },
+        "flags_desc": { "type": "string", "description": "Decoded human-readable flags." },
+        "mode": { "type": "integer", "description": "File permissions mode if created." },
+        "fd": { "type": "integer", "description": "Assigned file descriptor." },
+        "ret_code": { "type": "integer" },
+        "dir_fd": { "type": "integer" },
+        "inode": { "type": "integer" },
+        "device": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_write": {
+      "type": "object",
+      "required": ["fd", "count", "written"],
+      "properties": {
+        "fd": { "type": "integer", "description": "File descriptor being written to." },
+        "path": { "type": "string" },
+        "count": { "type": "integer", "description": "Bytes requested to write." },
+        "written": { "type": "integer", "description": "Bytes successfully written." },
+        "ret_code": { "type": "integer" },
+        "inode": { "type": "integer" },
+        "device": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_rename": {
+      "type": "object",
+      "required": ["old_path", "new_path"],
+      "properties": {
+        "old_path": { "type": "string", "description": "Source file path." },
+        "new_path": { "type": "string", "description": "Destination file path." },
+        "old_dir_fd": { "type": "integer" },
+        "new_dir_fd": { "type": "integer" },
+        "flags": { "type": "integer" },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_unlink": {
+      "type": "object",
+      "required": ["path", "is_dir"],
+      "properties": {
+        "path": { "type": "string", "description": "Path of file or directory removed." },
+        "dir_fd": { "type": "integer" },
+        "flags": { "type": "integer" },
+        "is_dir": { "type": "boolean", "description": "True if directory removal (rmdir / AT_REMOVEDIR)." },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_mkdir": {
+      "type": "object",
+      "required": ["path", "mode"],
+      "properties": {
+        "path": { "type": "string", "description": "Directory path created." },
+        "dir_fd": { "type": "integer" },
+        "mode": { "type": "integer", "description": "Directory permission mode." },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_chmod": {
+      "type": "object",
+      "required": ["path", "mode"],
+      "properties": {
+        "path": { "type": "string", "description": "Target file path." },
+        "dir_fd": { "type": "integer" },
+        "mode": { "type": "integer", "description": "New permission mode." },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_chown": {
+      "type": "object",
+      "required": ["path", "owner_id", "group_id"],
+      "properties": {
+        "path": { "type": "string", "description": "Target file path." },
+        "dir_fd": { "type": "integer" },
+        "owner_id": { "type": "integer", "description": "New UID (-1 if unchanged)." },
+        "group_id": { "type": "integer", "description": "New GID (-1 if unchanged)." },
+        "ret_code": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "filesystem_snapshot": {
+      "type": "object",
+      "required": ["device", "mount_point", "fs_type"],
+      "properties": {
+        "device": { "type": "string", "description": "Block device or pseudo-filesystem identifier." },
+        "mount_point": { "type": "string", "description": "Directory mount path." },
+        "fs_type": { "type": "string", "description": "Filesystem type (ext4, xfs, overlay, tmpfs)." },
+        "options": { "type": "string", "description": "Mount option flags (rw, relatime, etc.)." }
+      },
+      "additionalProperties": false
+    }
+  }
+}
