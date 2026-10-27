@@ -1,2 +1,7 @@
 .venv/
 *.duckdb
+__pycache__/
+*.py[cod]
+*$py.class
+alerts.jsonl
+.env
