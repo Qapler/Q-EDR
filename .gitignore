@@ -33,3 +33,11 @@ rustc-ice-*.txt
 # Python cache
 __pycache__/
 *.py[cod]
+components/graph-telemetry/.env
+
+# Local secrets and editor/system files
+.env
+.env.*
+!.env.example
+.DS_Store
+.vscode/

@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "evt-network-001",
+  "event_type": "network.connect",
+  "event_time": "2026-10-27T10:00:02Z",
+  "observed_time": "2026-10-27T10:00:02Z",
+  "collection_mode": "event",
+  "host": {
+    "host_id": "host-001",
+    "hostname": "linux-test"
+  },
+  "source": {},
+  "actor": {
+    "pid": 1200,
+    "process_entity_id": "proc-001",
+    "comm": "curl"
+  },
+  "data": {
+    "protocol": "tcp",
+    "remote_addr": "192.0.2.10",
+    "remote_port": 443
+  },
+  "quality": {}
+}

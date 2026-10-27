@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+neo4j
+pydantic
+pydantic-settings
+pytest
+pytest-asyncio
+httpx

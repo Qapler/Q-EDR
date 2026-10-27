@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "evt-file-001",
+  "event_type": "filesystem.open",
+  "event_time": "2026-10-27T10:00:01Z",
+  "observed_time": "2026-10-27T10:00:01Z",
+  "collection_mode": "event",
+  "host": {
+    "host_id": "host-001",
+    "hostname": "linux-test"
+  },
+  "source": {},
+  "actor": {
+    "pid": 1200,
+    "process_entity_id": "proc-001",
+    "comm": "curl"
+  },
+  "data": {
+    "file_path": "/tmp/example.txt",
+    "operation": "open"
+  },
+  "quality": {}
+}
