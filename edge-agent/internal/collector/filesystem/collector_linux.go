@@ -1,8 +1,11 @@
-//go:build linux
+//go:build linux && amd64
 
 // Package filesystem implements filesystem telemetry collection using eBPF syscall tracepoints.
 //
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64 -type fs_event fsProbe ../../bpf/filesystem.bpf.c -- -I../../bpf
+// The probes dispatch on x86_64 syscall numbers and registers, so this collector
+// is built for linux/amd64 only; other targets get the stub in collector_other.go.
+//
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64 -type fs_event fsProbe ../../../bpf/filesystem.bpf.c -- -I../../../bpf
 package filesystem
 
 import (
@@ -47,15 +50,17 @@ const (
 )
 
 type eventHeader struct {
-	EventType   uint32
-	PID         uint32
-	TID         uint32
-	PPID        uint32
-	UID         uint32
-	GID         uint32
-	TimestampNS uint64
-	CgroupID    uint64
-	Comm        [maxCommLen]byte
+	EventType         uint32
+	PID               uint32
+	TID               uint32
+	PPID              uint32
+	UID               uint32
+	GID               uint32
+	TimestampNS       uint64
+	CgroupID          uint64
+	Comm              [maxCommLen]byte
+	StartTimeNS       uint64 // group_leader->start_boottime
+	ParentStartTimeNS uint64 // real_parent->start_boottime
 }
 
 type fsEventRaw struct {
@@ -96,7 +101,7 @@ func New(cfg *config.Config, counters *metrics.Counters) *Collector {
 func (c *Collector) Name() string { return "filesystem" }
 
 func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) error {
-	c.bootTimeNS = getBootTimeOffsetNS()
+	c.bootTimeNS = host.BootTimeOffsetNS()
 
 	spec, err := loadFsProbe()
 	if err != nil {
@@ -108,24 +113,18 @@ func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) er
 		return fmt.Errorf("load filesystem eBPF objects: %w", err)
 	}
 
-	attachTracepoint := func(group, name string, prog *ebpf.Program) {
-		tp, err := link.Tracepoint(group, name, prog, nil)
+	// Raw syscall tracepoints; the BPF side dispatches on the syscall number.
+	attachRawTracepoint := func(name string, prog *ebpf.Program) {
+		tp, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: name, Program: prog})
 		if err != nil {
-			log.Printf("[filesystem] warning: could not attach %s/%s: %v", group, name, err)
+			log.Printf("[filesystem] warning: could not attach raw_tracepoint/%s: %v", name, err)
 		} else {
 			c.links = append(c.links, tp)
 		}
 	}
 
-	attachTracepoint("syscalls", "sys_enter_openat", objs.TracepointSyscallsSysEnterOpenat)
-	attachTracepoint("syscalls", "sys_exit_openat", objs.TracepointSyscallsSysExitOpenat)
-	attachTracepoint("syscalls", "sys_enter_write", objs.TracepointSyscallsSysEnterWrite)
-	attachTracepoint("syscalls", "sys_exit_write", objs.TracepointSyscallsSysExitWrite)
-	attachTracepoint("syscalls", "sys_enter_renameat2", objs.TracepointSyscallsSysEnterRenameat2)
-	attachTracepoint("syscalls", "sys_enter_unlinkat", objs.TracepointSyscallsSysEnterUnlinkat)
-	attachTracepoint("syscalls", "sys_enter_mkdirat", objs.TracepointSyscallsSysEnterMkdirat)
-	attachTracepoint("syscalls", "sys_enter_fchmodat", objs.TracepointSyscallsSysEnterFchmodat)
-	attachTracepoint("syscalls", "sys_enter_fchownat", objs.TracepointSyscallsSysEnterFchownat)
+	attachRawTracepoint("sys_enter", objs.RawTracepointSysEnter)
+	attachRawTracepoint("sys_exit", objs.RawTracepointSysExit)
 
 	c.reader, err = ringbuf.NewReader(objs.FsEvents)
 	if err != nil {
@@ -183,10 +182,12 @@ func (c *Collector) parseEvent(raw []byte) *envelope.Event {
 	}
 
 	comm := cString(rawEvt.Hdr.Comm[:])
-	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PID), rawEvt.Hdr.TimestampNS)
+	startNS := identity.NormalizeStartTimeNS(rawEvt.Hdr.StartTimeNS)
+	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PID), startNS)
 	parentEntityID := ""
 	if rawEvt.Hdr.PPID > 0 {
-		parentEntityID = identity.GenerateParentEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PPID), 0)
+		parentEntityID = identity.GenerateParentEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PPID),
+			identity.NormalizeStartTimeNS(rawEvt.Hdr.ParentStartTimeNS))
 	}
 
 	actor := &envelope.ActorInfo{
@@ -197,7 +198,7 @@ func (c *Collector) parseEvent(raw []byte) *envelope.Event {
 		Comm:            comm,
 		UID:             rawEvt.Hdr.UID,
 		GID:             rawEvt.Hdr.GID,
-		ProcessStartNS:  rawEvt.Hdr.TimestampNS,
+		ProcessStartNS:  startNS,
 		ProcessEntityID: entityID,
 	}
 
@@ -340,21 +341,6 @@ func (c *Collector) Snapshot(ctx context.Context, events chan<- *envelope.Event)
 func (c *Collector) ktimeToWallTime(ktimeNS uint64) time.Time {
 	wallNS := c.bootTimeNS + ktimeNS
 	return time.Unix(0, int64(wallNS)).UTC()
-}
-
-func getBootTimeOffsetNS() uint64 {
-	data, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return uint64(time.Now().UnixNano())
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "btime ") {
-			var btime uint64
-			fmt.Sscanf(line, "btime %d", &btime)
-			return btime * 1_000_000_000
-		}
-	}
-	return uint64(time.Now().UnixNano())
 }
 
 func cString(b []byte) string {

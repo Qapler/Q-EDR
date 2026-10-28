@@ -120,7 +120,8 @@ func scanProcess(pid int, hostInfo envelope.HostInfo, cfg *config.Config) *envel
 	source := envelope.NewSource("proc", "/proc/[pid]/*")
 	evt := envelope.NewEvent("process.snapshot", envelope.CollectionModeSnapshot, hostInfo, source, data)
 
-	entityID := identity.GenerateProcessEntityID(hostInfo.BootID, int32(pid), stat.startTimeTicks)
+	startNS := identity.StartTimeFromTicks(stat.startTimeTicks)
+	entityID := identity.GenerateProcessEntityID(hostInfo.BootID, int32(pid), startNS)
 
 	uid := status.uid
 	gid := status.gid
@@ -132,7 +133,7 @@ func scanProcess(pid int, hostInfo envelope.HostInfo, cfg *config.Config) *envel
 		Comm:            stat.comm,
 		Exe:             exe,
 		Cmdline:         cmdline,
-		ProcessStartNS:  stat.startTimeTicks,
+		ProcessStartNS:  startNS,
 		ProcessEntityID: entityID,
 		CgroupPath:      data.CgroupPath,
 	}

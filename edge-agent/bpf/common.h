@@ -54,7 +54,40 @@ struct event_header {
 	__u64 timestamp_ns;  /* bpf_ktime_get_boot_ns() */
 	__u64 cgroup_id;
 	char  comm[MAX_COMM_LEN];
+	__u64 start_time_ns;         /* group_leader->start_boottime */
+	__u64 parent_start_time_ns;  /* real_parent->start_boottime */
 };
+
+/* Populate the common header from the current task. Process identity
+ * (ppid, start times) is read from the thread-group leader via CO-RE. */
+static __always_inline void fill_header(struct event_header *hdr, __u32 event_type) {
+	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	__u64 uid_gid = bpf_get_current_uid_gid();
+	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+	struct task_struct *leader = NULL, *parent = NULL;
+	__u32 ppid = 0;
+	__u64 start = 0, pstart = 0;
+
+	READ_KERN(leader, &task->group_leader);
+	READ_KERN(start, &leader->start_boottime);
+	READ_KERN(parent, &leader->real_parent);
+	READ_KERN(ppid, &parent->tgid);
+	/* real_parent is the forking thread; identity uses its group leader. */
+	READ_KERN(parent, &parent->group_leader);
+	READ_KERN(pstart, &parent->start_boottime);
+
+	hdr->event_type = event_type;
+	hdr->pid = pid_tgid >> 32;       /* tgid = user-space PID */
+	hdr->tid = (__u32)pid_tgid;      /* pid = kernel thread ID */
+	hdr->ppid = ppid;
+	hdr->uid = (__u32)uid_gid;
+	hdr->gid = uid_gid >> 32;
+	hdr->timestamp_ns = bpf_ktime_get_boot_ns();
+	hdr->cgroup_id = bpf_get_current_cgroup_id();
+	bpf_get_current_comm(hdr->comm, sizeof(hdr->comm));
+	hdr->start_time_ns = start;
+	hdr->parent_start_time_ns = pstart;
+}
 
 /* ========== Process Events ========== */
 
@@ -72,6 +105,7 @@ struct process_fork_event {
 	__u32 child_tid;
 	__u64 clone_flags;
 	char  child_comm[MAX_COMM_LEN];
+	__u64 child_start_time_ns;
 };
 
 struct process_exit_event {

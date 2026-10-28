@@ -12,11 +12,26 @@
 
 #include "common.h"
 
+/* Force emitting event structs into BTF so bpf2go -type can generate Go types. */
+const struct network_event *unused_network_event __attribute__((unused));
+
 /* Ring buffer for network events */
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24); /* 16 MB */
 } network_events SEC(".maps");
+
+/* Socket owner recorded at connect() time, keyed by struct sock address.
+ * Later state transitions (SYN-ACK receipt, FIN/ACK handling) usually run in
+ * softirq context where the "current" task is unrelated to the socket, so
+ * connect and close events reuse this header instead. LRU so sockets that
+ * never reach TCP_CLOSE cannot exhaust the map. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, __u64);
+	__type(value, struct event_header);
+} sock_owner SEC(".maps");
 
 /* Temporary storage for bind enter→exit correlation */
 struct bind_args {
@@ -33,22 +48,6 @@ struct {
 	__type(value, struct bind_args);
 } bind_args_map SEC(".maps");
 
-/* Helper to populate common header */
-static __always_inline void fill_net_header(struct event_header *hdr, __u32 event_type) {
-	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	__u64 uid_gid = bpf_get_current_uid_gid();
-
-	hdr->event_type = event_type;
-	hdr->pid = pid_tgid >> 32;
-	hdr->tid = (__u32)pid_tgid;
-	hdr->uid = (__u32)uid_gid;
-	hdr->gid = uid_gid >> 32;
-	hdr->timestamp_ns = bpf_ktime_get_boot_ns();
-	hdr->cgroup_id = bpf_get_current_cgroup_id();
-	bpf_get_current_comm(hdr->comm, sizeof(hdr->comm));
-	hdr->ppid = 0;
-}
-
 /*
  * Tracepoint: sock/inet_sock_set_state
  *
@@ -58,9 +57,10 @@ static __always_inline void fill_net_header(struct event_header *hdr, __u32 even
  * Key transitions we observe:
  *   TCP_SYN_SENT → TCP_ESTABLISHED  (outbound connect succeeded)
  *   TCP_CLOSE    → TCP_SYN_SENT     (outbound connect initiated)
- *   TCP_NEW_SYN_RECV → TCP_ESTABLISHED (inbound accept)
- *   TCP_ESTABLISHED → TCP_CLOSE_WAIT (remote close)
- *   * → TCP_CLOSE                   (connection closed)
+ *   TCP_SYN_RECV → TCP_ESTABLISHED  (inbound accept; request sockets in
+ *                                    TCP_NEW_SYN_RECV never reach this tracepoint)
+ *   * → TCP_CLOSE                   (socket fully closed; emitted once per socket,
+ *                                    intermediate FIN_WAIT/CLOSE_WAIT states are skipped)
  *
  * Format:
  *   field: const void * skaddr;   offset:8;  size:8;
@@ -93,16 +93,25 @@ struct inet_sock_set_state_args {
 SEC("tracepoint/sock/inet_sock_set_state")
 int tracepoint__sock__inet_sock_set_state(struct inet_sock_set_state_args *ctx) {
 	struct network_event *evt;
+	struct event_header *owner;
+	__u64 sk = (__u64)ctx->skaddr;
 	__u32 event_type;
+
+	/* tcp_v4_connect/tcp_v6_connect run in the caller's context: remember it. */
+	if (ctx->oldstate == TCP_CLOSE && ctx->newstate == TCP_SYN_SENT) {
+		struct event_header hdr = {};
+		fill_header(&hdr, 0);
+		bpf_map_update_elem(&sock_owner, &sk, &hdr, BPF_ANY);
+		return 0;
+	}
 
 	/* Determine event type based on state transition */
 	if (ctx->newstate == TCP_ESTABLISHED && ctx->oldstate == TCP_SYN_SENT) {
 		event_type = EVENT_NET_CONNECT; /* Outbound connect succeeded */
-	} else if (ctx->newstate == TCP_ESTABLISHED && ctx->oldstate == TCP_NEW_SYN_RECV) {
+	} else if (ctx->newstate == TCP_ESTABLISHED && ctx->oldstate == TCP_SYN_RECV) {
 		event_type = EVENT_NET_ACCEPT;  /* Inbound connection accepted */
-	} else if (ctx->newstate == TCP_CLOSE || ctx->newstate == TCP_CLOSE_WAIT ||
-		   ctx->newstate == TCP_FIN_WAIT1) {
-		event_type = EVENT_NET_CLOSE;   /* Connection closing */
+	} else if (ctx->newstate == TCP_CLOSE) {
+		event_type = EVENT_NET_CLOSE;   /* Connection closed */
 	} else {
 		return 0; /* Skip other transitions */
 	}
@@ -111,7 +120,17 @@ int tracepoint__sock__inet_sock_set_state(struct inet_sock_set_state_args *ctx) 
 	if (!evt)
 		return 0;
 
-	fill_net_header(&evt->hdr, event_type);
+	owner = bpf_map_lookup_elem(&sock_owner, &sk);
+	if (owner) {
+		evt->hdr = *owner;
+		evt->hdr.event_type = event_type;
+		evt->hdr.timestamp_ns = bpf_ktime_get_boot_ns();
+	} else {
+		/* Inbound sockets: attribution is best-effort (may be softirq). */
+		fill_header(&evt->hdr, event_type);
+	}
+	if (event_type == EVENT_NET_CLOSE)
+		bpf_map_delete_elem(&sock_owner, &sk);
 
 	evt->family = ctx->family;
 	evt->protocol = ctx->protocol;
@@ -201,7 +220,7 @@ int tracepoint__syscalls__sys_exit_bind(struct sys_exit_bind_args *ctx) {
 	if (!evt)
 		goto cleanup;
 
-	fill_net_header(&evt->hdr, EVENT_NET_BIND);
+	fill_header(&evt->hdr, EVENT_NET_BIND);
 
 	evt->family = args->family;
 	evt->sport = args->port;

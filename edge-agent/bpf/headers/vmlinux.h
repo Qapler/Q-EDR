@@ -45,6 +45,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_HASH = 1,
 	BPF_MAP_TYPE_ARRAY = 2,
 	BPF_MAP_TYPE_PERF_EVENT_ARRAY = 4,
+	BPF_MAP_TYPE_LRU_HASH = 9,
 	BPF_MAP_TYPE_RINGBUF = 27,
 };
 
@@ -104,10 +105,32 @@ struct trace_entry {
 	int            pid;
 };
 
-/* Task structure fields we need */
+/* Task structure fields we need. preserve_access_index makes every access a
+ * CO-RE relocation, so offsets are resolved against the running kernel's BTF. */
 struct task_struct {
 	int pid;
 	int tgid;
+	int exit_code;
+	struct task_struct *real_parent;
+	struct task_struct *group_leader;
+	__u64 start_boottime;
+	char comm[16];
 } __attribute__((preserve_access_index));
+
+/* x86_64 user register frame (CO-RE). Syscall arguments are in di, si, dx,
+ * r10, r8, r9; orig_ax holds the syscall number. */
+struct pt_regs {
+	unsigned long r10;
+	unsigned long r8;
+	unsigned long dx;
+	unsigned long si;
+	unsigned long di;
+	unsigned long orig_ax;
+} __attribute__((preserve_access_index));
+
+/* Context for raw_tracepoint programs: the tracepoint's TP_PROTO arguments. */
+struct bpf_raw_tracepoint_args {
+	__u64 args[0];
+};
 
 #endif /* __VMLINUX_H__ */

@@ -11,28 +11,28 @@
 | Domain | Event Type | Mechanism | Hook / Tracepoint | Status | Notes |
 |---|---|---|---|---|---|
 | **Process** | `process.exec` | eBPF | `tracepoint/sched/sched_process_exec` | **Complete** | Captures binary, argv, retcode |
-| | `process.fork` | eBPF | `tracepoint/sched/sched_process_fork` | **Complete** | Child PID, TID, clone flags |
-| | `process.exit` | eBPF | `tracepoint/sched/sched_process_exit` | **Complete** | Exit code, terminating signal |
+| | `process.fork` | eBPF | `raw_tracepoint/sched_process_fork` | **Complete** | Child PID, TID, comm, entity ID (new processes only; threads skipped; clone flags not captured) |
+| | `process.exit` | eBPF | `tracepoint/sched/sched_process_exit` | **Complete** | Exit code, terminating signal (from `task->exit_code` via CO-RE) |
 | | `process.snapshot` | `/proc` | `/proc/[pid]/stat,status,cmdline` | **Complete** | Full process table scan |
-| **Network** | `network.connect` | eBPF | `tracepoint/sock/inet_sock_set_state` | **Complete** | Outbound TCP state transitions |
-| | `network.accept` | eBPF | `tracepoint/sock/inet_sock_set_state` | **Complete** | Inbound TCP accepted sockets |
+| **Network** | `network.connect` | eBPF | `tracepoint/sock/inet_sock_set_state` | **Complete** | Outbound TCP; actor recorded at `connect()` time |
+| | `network.accept` | eBPF | `tracepoint/sock/inet_sock_set_state` | **Complete** | Inbound TCP; actor is best-effort (transition runs in softirq) |
 | | `network.bind` | eBPF | `tracepoint/syscalls/sys_enter_bind` | **Complete** | Local address/port binding |
-| | `network.close` | eBPF | `tracepoint/sock/inet_sock_set_state` | **Complete** | TCP close transitions |
+| | `network.close` | eBPF | `tracepoint/sock/inet_sock_set_state` | **Complete** | One event per socket on transition to `TCP_CLOSE` |
 | | `network.snapshot` | `/proc` | `/proc/net/tcp`, `/proc/net/udp` | **Complete** | Listening & established sockets |
 | **IPC** | `ipc.pipe_create` | eBPF | `tracepoint/syscalls/sys_exit_pipe2` | **Complete** | Anonymous pipes |
 | | `ipc.socketpair_create` | eBPF | `tracepoint/syscalls/sys_exit_socketpair` | **Complete** | UNIX domain socket pairs |
 | | `ipc.shm_get` | eBPF | `tracepoint/syscalls/sys_enter_shmget` | **Complete** | System V shared memory |
 | | `ipc.msg_send` | eBPF | `tracepoint/syscalls/sys_enter_msgsnd` | **Complete** | System V message queue send |
-| | `ipc.sem_op` | eBPF | `tracepoint/syscalls/sys_enter_semop` | **Complete** | System V semaphore operations |
+| | `ipc.sem_op` | eBPF | `tracepoint/syscalls/sys_enter_semop`, `sys_enter_semtimedop` | **Complete** | System V semaphore operations (glibc `semop()` uses `semtimedop`) |
 | | `ipc.snapshot` | `/proc` | `/proc/sysvipc/shm,msg,sem` | **Complete** | System V active resources |
-| **Filesystem** | `filesystem.open` | eBPF | `tracepoint/syscalls/sys_enter_openat` | **Complete** | Target path, flags, mode, FD |
-| | `filesystem.create` | eBPF | `tracepoint/syscalls/sys_enter_openat` | **Complete** | Auto-detected via `O_CREAT` |
-| | `filesystem.write` | eBPF | `tracepoint/syscalls/sys_enter_write` | **Complete** | Metadata only (bytes written) |
-| | `filesystem.rename` | eBPF | `tracepoint/syscalls/sys_enter_renameat2`| **Complete** | Source path and destination path |
-| | `filesystem.unlink` | eBPF | `tracepoint/syscalls/sys_enter_unlinkat` | **Complete** | File & directory deletion |
-| | `filesystem.mkdir` | eBPF | `tracepoint/syscalls/sys_enter_mkdirat` | **Complete** | Directory creation with mode |
-| | `filesystem.chmod` | eBPF | `tracepoint/syscalls/sys_enter_fchmodat` | **Complete** | Permission changes |
-| | `filesystem.chown` | eBPF | `tracepoint/syscalls/sys_enter_fchownat`  | **Complete** | Owner / group modifications |
+| **Filesystem** | `filesystem.open` | eBPF | `raw_tracepoint/sys_enter` + `sys_exit` | **Complete** | `open`, `creat`, `openat`, `openat2`; path, flags, mode, FD |
+| | `filesystem.create` | eBPF | `raw_tracepoint/sys_enter` + `sys_exit` | **Complete** | Auto-detected via `O_CREAT` |
+| | `filesystem.write` | eBPF | `raw_tracepoint/sys_enter` + `sys_exit` | **Complete** | Metadata only (bytes written) |
+| | `filesystem.rename` | eBPF | `raw_tracepoint/sys_enter` | **Complete** | `rename`, `renameat`, `renameat2` |
+| | `filesystem.unlink` | eBPF | `raw_tracepoint/sys_enter` | **Complete** | `unlink`, `rmdir`, `unlinkat` |
+| | `filesystem.mkdir` | eBPF | `raw_tracepoint/sys_enter` | **Complete** | `mkdir`, `mkdirat` with mode |
+| | `filesystem.chmod` | eBPF | `raw_tracepoint/sys_enter` | **Complete** | `chmod`, `fchmodat`, `fchmodat2` |
+| | `filesystem.chown` | eBPF | `raw_tracepoint/sys_enter` | **Complete** | `chown`, `lchown`, `fchownat` |
 | | `filesystem.snapshot` | `/proc` | `/proc/mounts` | **Complete** | Mount point inventory |
 
 ---

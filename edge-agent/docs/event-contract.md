@@ -89,7 +89,7 @@ $$\text{ProcessEntityID} = \text{Truncate}_{32}(\text{SHA256}(\text{boot\_id} \m
 | `comm` | String | Yes | Short comm name from `task_struct` ($\le 16$ chars). | `"curl"` |
 | `exe` | String | Optional | Absolute executable path from `/proc/[pid]/exe`. | `"/usr/bin/curl"` |
 | `cmdline` | Array[String] | Optional | Command-line arguments. | `["curl", "-s", "https://api.internal/"]` |
-| `process_start_time_ns` | Integer | Optional | Start timestamp in nanoseconds since boot. | `1729695845123456000` |
+| `process_start_time_ns` | Integer | Optional | Process start in nanoseconds since boot (`task->start_boottime`), truncated to the 10 ms clock-tick resolution of `/proc/[pid]/stat` so eBPF events and snapshots agree. This value is the start-time input to `process_entity_id`. | `48012340000000` |
 | `process_entity_id` | String | Yes | Deterministic unique instance identifier. | `"4f9a7218b0e123fa4891b2c3d4e5f6a7"` |
 | `parent_comm` | String | Optional | Short name of parent process. | `"bash"` |
 | `parent_entity_id` | String | Optional | Deterministic unique parent identifier. | `"1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"` |
@@ -110,7 +110,7 @@ Triggered when a thread executes a new program via `execve` / `execveat`. Hook: 
   * `ret_code` (integer, optional): System call return code (0 = success).
 
 #### `process.fork`
-Triggered when a process creates a child via `clone`, `clone3`, `fork`, or `vfork`. Hook: `sched/sched_process_fork`.
+Triggered when a process creates a child via `clone`, `clone3`, `fork`, or `vfork`. Hook: `raw_tracepoint/sched_process_fork`. Thread creation (`CLONE_THREAD`) is not reported.
 * Payload (`data`):
   * `child_pid` (integer, required): PID of newly created child.
   * `child_tid` (integer, optional): TID of newly created thread.
@@ -259,7 +259,7 @@ Snapshot of active System V IPC resources from `/proc/sysvipc/shm`, `/proc/sysvi
 ### 4.4 Filesystem Telemetry (`filesystem.*`)
 
 #### `filesystem.open` & `filesystem.create`
-File opened for reading, writing, or creation via `openat`. Hook: `syscalls/sys_enter_openat` and exit.
+File opened for reading, writing, or creation via `open`, `creat`, `openat`, or `openat2`. Hook: `raw_tracepoint/sys_enter` and `sys_exit`.
 * Payload (`data`):
   * `path` (string, optional): Resolved target file path.
   * `path_error` (string, optional): Set if path resolution failed in kernel.
@@ -277,7 +277,7 @@ Data written to file descriptor. Hook: `syscalls/sys_enter_write` and exit. (Cap
   * `written` (integer, required): Number of bytes actually written (or negative errno).
 
 #### `filesystem.rename`
-File or directory renamed/moved. Hook: `syscalls/sys_enter_renameat2`.
+File or directory renamed/moved. Hook: `raw_tracepoint/sys_enter` (`rename`, `renameat`, `renameat2`).
 * Payload (`data`):
   * `old_path` (string, required): Source path.
   * `new_path` (string, required): Target path.
@@ -296,7 +296,7 @@ Directory created. Hook: `syscalls/sys_enter_mkdirat`.
   * `mode` (integer, required): Permissions mode.
 
 #### `filesystem.chmod` & `filesystem.chown`
-Metadata permission or ownership modifications. Hooks: `syscalls/sys_enter_fchmodat`, `sys_enter_fchownat`.
+Metadata permission or ownership modifications. Hook: `raw_tracepoint/sys_enter` (`chmod`, `fchmodat`, `fchmodat2`, `chown`, `lchown`, `fchownat`).
 * `filesystem.chmod` Payload: `path` (string), `mode` (integer).
 * `filesystem.chown` Payload: `path` (string), `owner_id` (integer), `group_id` (integer).
 

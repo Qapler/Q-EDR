@@ -4,6 +4,8 @@ bin/
 /q-edr-collector
 /q-edr-collector-*
 *.o
+# bpf2go output is embedded via go:embed and must be committed.
+!internal/collector/*/*_bpfel.o
 *.so
 coverage.out
 

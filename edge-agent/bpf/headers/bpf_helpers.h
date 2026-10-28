@@ -63,6 +63,10 @@ static __u64 (*bpf_ktime_get_boot_ns)(void) = (void *) 125;
 /* Force emitting a global */
 #define __always_inline inline __attribute__((always_inline))
 
+/* CO-RE kernel read: copies *ptr into dst, relocating the field offset. */
+#define READ_KERN(dst, ptr) \
+	bpf_probe_read_kernel(&(dst), sizeof(dst), __builtin_preserve_access_index(ptr))
+
 /* Ring buffer flags */
 #define BPF_RB_NO_WAKEUP  (1ULL << 0)
 #define BPF_RB_FORCE_WAKEUP (1ULL << 1)

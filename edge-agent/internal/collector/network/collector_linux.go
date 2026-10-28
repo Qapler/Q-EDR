@@ -2,7 +2,7 @@
 
 // Package network implements network telemetry collection using eBPF and /proc/net.
 //
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64 -type network_event networkProbe ../../bpf/network.bpf.c -- -I../../bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64,arm64 -type network_event networkProbe ../../../bpf/network.bpf.c -- -I../../../bpf
 package network
 
 import (
@@ -39,15 +39,17 @@ const (
 )
 
 type eventHeader struct {
-	EventType   uint32
-	PID         uint32
-	TID         uint32
-	PPID        uint32
-	UID         uint32
-	GID         uint32
-	TimestampNS uint64
-	CgroupID    uint64
-	Comm        [maxCommLen]byte
+	EventType         uint32
+	PID               uint32
+	TID               uint32
+	PPID              uint32
+	UID               uint32
+	GID               uint32
+	TimestampNS       uint64
+	CgroupID          uint64
+	Comm              [maxCommLen]byte
+	StartTimeNS       uint64 // group_leader->start_boottime
+	ParentStartTimeNS uint64 // real_parent->start_boottime
 }
 
 type networkEventRaw struct {
@@ -85,7 +87,7 @@ func New(cfg *config.Config, counters *metrics.Counters) *Collector {
 func (c *Collector) Name() string { return "network" }
 
 func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) error {
-	c.bootTimeNS = getBootTimeOffsetNS()
+	c.bootTimeNS = host.BootTimeOffsetNS()
 
 	spec, err := loadNetworkProbe()
 	if err != nil {
@@ -238,13 +240,22 @@ func (c *Collector) parseEvent(raw []byte) *envelope.Event {
 	evt.SetEventTime(c.kernelTSToWallClock(re.Hdr.TimestampNS))
 
 	comm := cstring(re.Hdr.Comm[:])
-	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(re.Hdr.PID), re.Hdr.TimestampNS)
+	startNS := identity.NormalizeStartTimeNS(re.Hdr.StartTimeNS)
+	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(re.Hdr.PID), startNS)
+	parentEntityID := ""
+	if re.Hdr.PPID > 0 {
+		parentEntityID = identity.GenerateParentEntityID(c.hostInfo.BootID, int32(re.Hdr.PPID),
+			identity.NormalizeStartTimeNS(re.Hdr.ParentStartTimeNS))
+	}
 	evt.SetActor(&envelope.ActorInfo{
 		PID:             int32(re.Hdr.PID),
 		TID:             int32(re.Hdr.TID),
+		PPID:            int32(re.Hdr.PPID),
+		ParentEntityID:  parentEntityID,
 		UID:             re.Hdr.UID,
 		GID:             re.Hdr.GID,
 		Comm:            comm,
+		ProcessStartNS:  startNS,
 		ProcessEntityID: entityID,
 	})
 
@@ -332,21 +343,6 @@ func hexToPort(hex string) uint16 {
 func (c *Collector) kernelTSToWallClock(bootNS uint64) time.Time {
 	wallNS := c.bootTimeNS + bootNS
 	return time.Unix(0, int64(wallNS)).UTC()
-}
-
-func getBootTimeOffsetNS() uint64 {
-	data, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return uint64(time.Now().UnixNano())
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "btime ") {
-			var btime uint64
-			fmt.Sscanf(line, "btime %d", &btime)
-			return btime * 1_000_000_000
-		}
-	}
-	return uint64(time.Now().UnixNano())
 }
 
 func familyString(f uint16) string {

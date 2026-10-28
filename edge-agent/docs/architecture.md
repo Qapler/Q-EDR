@@ -62,10 +62,11 @@ flowchart TB
 * **Status:** Accepted
 * **Context:** In-kernel probes can attach to kprobes (kernel internal functions) or tracepoints (stable kernel trace ABI). Kprobe function signatures frequently change across minor kernel revisions (e.g. from 5.15 to 6.2 to 6.8), requiring fragile kernel version guards or runtime BTF rewriting.
 * **Decision:** Q-EDR relies strictly on **Tracepoints** for all events:
-  * Process: `tracepoint/sched/sched_process_exec`, `sched_process_fork`, `sched_process_exit`
+  * Process: `tracepoint/sched/sched_process_exec`, `sched_process_exit`, `raw_tracepoint/sched_process_fork`
   * Network: `tracepoint/sock/inet_sock_set_state`, `tracepoint/syscalls/sys_enter_bind`
   * IPC: `tracepoint/syscalls/sys_enter_pipe2`, `sys_enter_socketpair`, `sys_enter_shmget`, etc.
-  * Filesystem: `tracepoint/syscalls/sys_enter_openat`, `sys_enter_write`, `sys_enter_unlinkat`, etc.
+  * Filesystem: `raw_tracepoint/sys_enter` and `raw_tracepoint/sys_exit`, dispatching on the x86_64 syscall number
+* **Amendment (raw tracepoints):** Raw tracepoints are still stable trace ABI, not kprobes. They are used where the formatted tracepoint proved unreliable: `sched_process_fork`'s record layout changed (comm fields became `__data_loc`), so the child is read from `task_struct` via CO-RE; and on Linux 7.0 the per-syscall `sys_enter_*` tracepoints that capture user-space strings ran attached programs for only ~9% of calls system-wide, while `raw_tracepoint/sys_enter` saw all of them. `task_struct` and `pt_regs` fields are accessed via CO-RE relocations (`preserve_access_index`), resolved against the running kernel's BTF.
 * **Consequences:** Provides rock-solid stability across Linux kernels $\ge 5.10$ without kernel crashes or trace breakage during distro package updates.
 
 ### ADR-002: BPF Ring Buffer Over Perf Event Array

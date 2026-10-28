@@ -16,6 +16,15 @@
 
 #include "common.h"
 
+/*
+ * Syscall tracepoint records store every argument in an 8-byte slot starting
+ * at offset 16 (see /sys/kernel/tracing/events/syscalls/<name>/format), so int
+ * arguments that follow other ints are declared 64-bit and narrowed on read.
+ */
+
+/* Force emitting event structs into BTF so bpf2go -type can generate Go types. */
+const struct ipc_event *unused_ipc_event __attribute__((unused));
+
 /* Ring buffer for IPC events */
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -24,7 +33,7 @@ struct {
 
 /* Temp storage for pipe2 enter→exit correlation */
 struct pipe_args {
-	const void *fildes; /* User pointer to int[2] */
+	__u64 fildes; /* User pointer to int[2] (as u64: bpf2go can't map pointers) */
 	__s32 flags;
 };
 
@@ -37,7 +46,7 @@ struct {
 
 /* Temp storage for socketpair enter→exit */
 struct socketpair_args {
-	const void *usockvec; /* User pointer to int[2] */
+	__u64 usockvec; /* User pointer to int[2] (as u64: bpf2go can't map pointers) */
 	__u16 family;
 	__u16 type;
 	__s32 protocol;
@@ -49,21 +58,6 @@ struct {
 	__type(key, __u64);
 	__type(value, struct socketpair_args);
 } socketpair_args_map SEC(".maps");
-
-static __always_inline void fill_ipc_header(struct event_header *hdr, __u32 event_type) {
-	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	__u64 uid_gid = bpf_get_current_uid_gid();
-
-	hdr->event_type = event_type;
-	hdr->pid = pid_tgid >> 32;
-	hdr->tid = (__u32)pid_tgid;
-	hdr->uid = (__u32)uid_gid;
-	hdr->gid = uid_gid >> 32;
-	hdr->timestamp_ns = bpf_ktime_get_boot_ns();
-	hdr->cgroup_id = bpf_get_current_cgroup_id();
-	bpf_get_current_comm(hdr->comm, sizeof(hdr->comm));
-	hdr->ppid = 0;
-}
 
 /* ========== Pipe Events ========== */
 
@@ -79,7 +73,7 @@ SEC("tracepoint/syscalls/sys_enter_pipe2")
 int tracepoint__syscalls__sys_enter_pipe2(struct sys_enter_pipe2_args *ctx) {
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
 	struct pipe_args args = {
-		.fildes = ctx->fildes,
+		.fildes = (__u64)ctx->fildes,
 		.flags = ctx->flags,
 	};
 	bpf_map_update_elem(&pipe_args_map, &pid_tgid, &args, BPF_ANY);
@@ -109,11 +103,11 @@ int tracepoint__syscalls__sys_exit_pipe2(struct sys_exit_pipe2_args *ctx) {
 	if (!evt)
 		goto cleanup;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_PIPE);
+	fill_header(&evt->hdr, EVENT_IPC_PIPE);
 
 	/* Read the pipe FDs from user memory */
 	int fds[2] = {-1, -1};
-	bpf_probe_read_user(fds, sizeof(fds), args->fildes);
+	bpf_probe_read_user(fds, sizeof(fds), (const void *)args->fildes);
 	evt->fd0 = fds[0]; /* read end */
 	evt->fd1 = fds[1]; /* write end */
 	evt->flags = args->flags;
@@ -141,9 +135,9 @@ struct sys_enter_socketpair_args {
 	struct trace_entry ent;
 	__s32 __syscall_nr;
 	__u32 pad;
-	__s32 family;
-	__s32 type;
-	__s32 protocol;
+	__s64 family;
+	__s64 type;
+	__s64 protocol;
 	const void *usockvec;
 };
 
@@ -151,10 +145,10 @@ SEC("tracepoint/syscalls/sys_enter_socketpair")
 int tracepoint__syscalls__sys_enter_socketpair(struct sys_enter_socketpair_args *ctx) {
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
 	struct socketpair_args args = {
-		.usockvec = ctx->usockvec,
+		.usockvec = (__u64)ctx->usockvec,
 		.family = (__u16)ctx->family,
 		.type = (__u16)ctx->type,
-		.protocol = ctx->protocol,
+		.protocol = (__s32)ctx->protocol,
 	};
 	bpf_map_update_elem(&socketpair_args_map, &pid_tgid, &args, BPF_ANY);
 	return 0;
@@ -183,10 +177,10 @@ int tracepoint__syscalls__sys_exit_socketpair(struct sys_exit_socketpair_args *c
 	if (!evt)
 		goto cleanup;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_SOCKETPAIR);
+	fill_header(&evt->hdr, EVENT_IPC_SOCKETPAIR);
 
 	int fds[2] = {-1, -1};
-	bpf_probe_read_user(fds, sizeof(fds), args->usockvec);
+	bpf_probe_read_user(fds, sizeof(fds), (const void *)args->usockvec);
 	evt->fd0 = fds[0];
 	evt->fd1 = fds[1];
 	evt->family = args->family;
@@ -226,7 +220,7 @@ int tracepoint__syscalls__sys_enter_shmget(struct sys_enter_shmget_args *ctx) {
 	if (!evt)
 		return 0;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_SHMGET);
+	fill_header(&evt->hdr, EVENT_IPC_SHMGET);
 	evt->key = ctx->key;
 	evt->size = ctx->size;
 	evt->flags = ctx->shmflg;
@@ -251,8 +245,8 @@ struct sys_enter_msgget_args {
 	struct trace_entry ent;
 	__s32 __syscall_nr;
 	__u32 pad;
-	__s32 key;
-	__s32 msgflg;
+	__s64 key;
+	__s64 msgflg;
 };
 
 SEC("tracepoint/syscalls/sys_enter_msgget")
@@ -262,9 +256,9 @@ int tracepoint__syscalls__sys_enter_msgget(struct sys_enter_msgget_args *ctx) {
 	if (!evt)
 		return 0;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_MSGGET);
-	evt->key = ctx->key;
-	evt->flags = ctx->msgflg;
+	fill_header(&evt->hdr, EVENT_IPC_MSGGET);
+	evt->key = (__s32)ctx->key;
+	evt->flags = (__s32)ctx->msgflg;
 	evt->fd0 = -1;
 	evt->fd1 = -1;
 	evt->ipc_id = 0;
@@ -298,7 +292,7 @@ int tracepoint__syscalls__sys_enter_msgsnd(struct sys_enter_msgsnd_args *ctx) {
 	if (!evt)
 		return 0;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_MSGSND);
+	fill_header(&evt->hdr, EVENT_IPC_MSGSND);
 	evt->ipc_id = ctx->msqid;
 	evt->size = ctx->msgsz;
 	evt->flags = ctx->msgflg;
@@ -328,9 +322,9 @@ struct sys_enter_semget_args {
 	struct trace_entry ent;
 	__s32 __syscall_nr;
 	__u32 pad;
-	__s32 key;
-	__s32 nsems;
-	__s32 semflg;
+	__s64 key;
+	__s64 nsems;
+	__s64 semflg;
 };
 
 SEC("tracepoint/syscalls/sys_enter_semget")
@@ -340,10 +334,10 @@ int tracepoint__syscalls__sys_enter_semget(struct sys_enter_semget_args *ctx) {
 	if (!evt)
 		return 0;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_SEMGET);
-	evt->key = ctx->key;
-	evt->nsems = ctx->nsems;
-	evt->flags = ctx->semflg;
+	fill_header(&evt->hdr, EVENT_IPC_SEMGET);
+	evt->key = (__s32)ctx->key;
+	evt->nsems = (__s32)ctx->nsems;
+	evt->flags = (__s32)ctx->semflg;
 	evt->fd0 = -1;
 	evt->fd1 = -1;
 	evt->ipc_id = 0;
@@ -368,14 +362,15 @@ struct sys_enter_semop_args {
 	__u32 nsops;
 };
 
-SEC("tracepoint/syscalls/sys_enter_semop")
-int tracepoint__syscalls__sys_enter_semop(struct sys_enter_semop_args *ctx) {
+/* glibc implements semop() with semtimedop(), whose leading arguments
+ * (semid, tsops, nsops) share this layout; both tracepoints use this body. */
+static __always_inline int handle_semop(struct sys_enter_semop_args *ctx) {
 	struct ipc_event *evt;
 	evt = bpf_ringbuf_reserve(&ipc_events, sizeof(*evt), 0);
 	if (!evt)
 		return 0;
 
-	fill_ipc_header(&evt->hdr, EVENT_IPC_SEMOP);
+	fill_header(&evt->hdr, EVENT_IPC_SEMOP);
 	evt->ipc_id = ctx->semid;
 	evt->nsops = (__s32)ctx->nsops;
 	evt->key = 0;
@@ -392,6 +387,16 @@ int tracepoint__syscalls__sys_enter_semop(struct sys_enter_semop_args *ctx) {
 
 	bpf_ringbuf_submit(evt, 0);
 	return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_semop")
+int tracepoint__syscalls__sys_enter_semop(struct sys_enter_semop_args *ctx) {
+	return handle_semop(ctx);
+}
+
+SEC("tracepoint/syscalls/sys_enter_semtimedop")
+int tracepoint__syscalls__sys_enter_semtimedop(struct sys_enter_semop_args *ctx) {
+	return handle_semop(ctx);
 }
 
 LICENSE("Dual BSD/GPL");

@@ -12,30 +12,16 @@
 
 #include "common.h"
 
+/* Force emitting event structs into BTF so bpf2go -type can generate Go types. */
+const struct process_exec_event *unused_process_exec_event __attribute__((unused));
+const struct process_fork_event *unused_process_fork_event __attribute__((unused));
+const struct process_exit_event *unused_process_exit_event __attribute__((unused));
+
 /* Ring buffer for sending events to user-space */
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24); /* 16 MB */
 } process_events SEC(".maps");
-
-/* Helper to populate common event header fields */
-static __always_inline void fill_header(struct event_header *hdr, __u32 event_type) {
-	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	__u64 uid_gid = bpf_get_current_uid_gid();
-
-	hdr->event_type = event_type;
-	hdr->pid = pid_tgid >> 32;       /* tgid = user-space PID */
-	hdr->tid = (__u32)pid_tgid;      /* pid = kernel thread ID */
-	hdr->uid = (__u32)uid_gid;
-	hdr->gid = uid_gid >> 32;
-	hdr->timestamp_ns = bpf_ktime_get_boot_ns();
-	hdr->cgroup_id = bpf_get_current_cgroup_id();
-	bpf_get_current_comm(hdr->comm, sizeof(hdr->comm));
-
-	/* PPID requires reading from the task_struct; set to 0 as fallback.
-	 * User-space enriches PPID from /proc if needed. */
-	hdr->ppid = 0;
-}
 
 /*
  * Tracepoint: sched/sched_process_exec
@@ -77,39 +63,41 @@ int tracepoint__sched__process_exec(struct sched_process_exec_args *ctx) {
 }
 
 /*
- * Tracepoint: sched/sched_process_fork
+ * Raw tracepoint: sched_process_fork
  *
- * Fires when a process calls fork/clone/vfork.
- * Format:
- *   field: char parent_comm[16]; offset:8;  size:16;
- *   field: pid_t parent_pid;     offset:24; size:4;
- *   field: char child_comm[16];  offset:28; size:16;
- *   field: pid_t child_pid;      offset:44; size:4;
+ * TP_PROTO(struct task_struct *parent, struct task_struct *child).
+ * A raw tracepoint is used instead of tracepoint/sched/sched_process_fork
+ * because that tracepoint's record layout changed across kernels (char[16]
+ * comm fields became __data_loc), while the task_struct fields are read with
+ * CO-RE and stay portable. Thread creation (CLONE_THREAD) is skipped so that
+ * process.fork means a new process, matching the leader-only exit events.
  */
-struct sched_process_fork_args {
-	struct trace_entry ent;
-	char   parent_comm[MAX_COMM_LEN];
-	__s32  parent_pid;
-	char   child_comm[MAX_COMM_LEN];
-	__s32  child_pid;
-};
-
-SEC("tracepoint/sched/sched_process_fork")
-int tracepoint__sched__process_fork(struct sched_process_fork_args *ctx) {
+SEC("raw_tracepoint/sched_process_fork")
+int raw_tracepoint__sched_process_fork(struct bpf_raw_tracepoint_args *ctx) {
+	struct task_struct *parent = (struct task_struct *)ctx->args[0];
+	struct task_struct *child = (struct task_struct *)ctx->args[1];
 	struct process_fork_event *evt;
+	int parent_tgid = 0, child_pid = 0, child_tgid = 0;
+
+	READ_KERN(parent_tgid, &parent->tgid);
+	READ_KERN(child_pid, &child->pid);
+	READ_KERN(child_tgid, &child->tgid);
+	if (child_tgid == parent_tgid)
+		return 0;
 
 	evt = bpf_ringbuf_reserve(&process_events, sizeof(*evt), 0);
 	if (!evt)
 		return 0;
 
 	fill_header(&evt->hdr, EVENT_PROCESS_FORK);
-	evt->hdr.ppid = evt->hdr.pid; /* Parent is the current process */
 
-	evt->child_pid = ctx->child_pid;
-	evt->child_tid = ctx->child_pid;
+	evt->child_pid = child_tgid;
+	evt->child_tid = child_pid;
 	evt->clone_flags = 0; /* Not available from this tracepoint */
-	bpf_probe_read_kernel(evt->child_comm, sizeof(evt->child_comm),
-			      ctx->child_comm);
+	bpf_probe_read_kernel_str(evt->child_comm, sizeof(evt->child_comm),
+				  __builtin_preserve_access_index(&child->comm));
+	evt->child_start_time_ns = 0;
+	READ_KERN(evt->child_start_time_ns, &child->start_boottime);
 
 	bpf_ringbuf_submit(evt, 0);
 	return 0;
@@ -118,21 +106,11 @@ int tracepoint__sched__process_fork(struct sched_process_fork_args *ctx) {
 /*
  * Tracepoint: sched/sched_process_exit
  *
- * Fires when a process (or thread) exits.
- * Format:
- *   field: char comm[16]; offset:8;  size:16;
- *   field: pid_t pid;     offset:24; size:4;
- *   field: int prio;      offset:28; size:4;
+ * Fires when a process (or thread) exits. do_exit() stores the wait status
+ * in task->exit_code before this tracepoint fires, so it is read via CO-RE.
  */
-struct sched_process_exit_args {
-	struct trace_entry ent;
-	char  comm[MAX_COMM_LEN];
-	__s32 pid;
-	__s32 prio;
-};
-
 SEC("tracepoint/sched/sched_process_exit")
-int tracepoint__sched__process_exit(struct sched_process_exit_args *ctx) {
+int tracepoint__sched__process_exit(void *ctx) {
 	struct process_exit_event *evt;
 
 	/* Only report thread-group leaders (PID == TID) to avoid
@@ -149,11 +127,13 @@ int tracepoint__sched__process_exit(struct sched_process_exit_args *ctx) {
 
 	fill_header(&evt->hdr, EVENT_PROCESS_EXIT);
 
-	/* Exit code is not directly available from this tracepoint.
-	 * Set to 0; user-space can attempt to read /proc before cleanup. */
-	evt->exit_code = 0;
-	evt->signal = 0;
-	evt->start_time_ns = 0;
+	/* exit_code is a wait(2) status: exit status in bits 8-15, signal in 0-6. */
+	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+	int code = 0;
+	READ_KERN(code, &task->exit_code);
+	evt->exit_code = (code >> 8) & 0xff;
+	evt->signal = code & 0x7f;
+	evt->start_time_ns = evt->hdr.start_time_ns;
 
 	bpf_ringbuf_submit(evt, 0);
 	return 0;

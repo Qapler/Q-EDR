@@ -2,7 +2,7 @@
 
 // Package ipc implements IPC telemetry collection using eBPF syscall tracepoints.
 //
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64 -type ipc_event ipcProbe ../../bpf/ipc.bpf.c -- -I../../bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64,arm64 -type ipc_event ipcProbe ../../../bpf/ipc.bpf.c -- -I../../../bpf
 package ipc
 
 import (
@@ -45,15 +45,17 @@ const (
 )
 
 type eventHeader struct {
-	EventType   uint32
-	PID         uint32
-	TID         uint32
-	PPID        uint32
-	UID         uint32
-	GID         uint32
-	TimestampNS uint64
-	CgroupID    uint64
-	Comm        [maxCommLen]byte
+	EventType         uint32
+	PID               uint32
+	TID               uint32
+	PPID              uint32
+	UID               uint32
+	GID               uint32
+	TimestampNS       uint64
+	CgroupID          uint64
+	Comm              [maxCommLen]byte
+	StartTimeNS       uint64 // group_leader->start_boottime
+	ParentStartTimeNS uint64 // real_parent->start_boottime
 }
 
 type ipcEventRaw struct {
@@ -95,7 +97,7 @@ func New(cfg *config.Config, counters *metrics.Counters) *Collector {
 func (c *Collector) Name() string { return "ipc" }
 
 func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) error {
-	c.bootTimeNS = getBootTimeOffsetNS()
+	c.bootTimeNS = host.BootTimeOffsetNS()
 
 	spec, err := loadIpcProbe()
 	if err != nil {
@@ -126,6 +128,7 @@ func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) er
 	attachTracepoint("syscalls", "sys_enter_msgsnd", objs.TracepointSyscallsSysEnterMsgsnd)
 	attachTracepoint("syscalls", "sys_enter_semget", objs.TracepointSyscallsSysEnterSemget)
 	attachTracepoint("syscalls", "sys_enter_semop", objs.TracepointSyscallsSysEnterSemop)
+	attachTracepoint("syscalls", "sys_enter_semtimedop", objs.TracepointSyscallsSysEnterSemtimedop)
 
 	// Open ring buffer reader
 	c.reader, err = ringbuf.NewReader(objs.IpcEvents)
@@ -184,10 +187,12 @@ func (c *Collector) parseEvent(raw []byte) *envelope.Event {
 	}
 
 	comm := cString(rawEvt.Hdr.Comm[:])
-	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PID), rawEvt.Hdr.TimestampNS)
+	startNS := identity.NormalizeStartTimeNS(rawEvt.Hdr.StartTimeNS)
+	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PID), startNS)
 	parentEntityID := ""
 	if rawEvt.Hdr.PPID > 0 {
-		parentEntityID = identity.GenerateParentEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PPID), 0)
+		parentEntityID = identity.GenerateParentEntityID(c.hostInfo.BootID, int32(rawEvt.Hdr.PPID),
+			identity.NormalizeStartTimeNS(rawEvt.Hdr.ParentStartTimeNS))
 	}
 
 	actor := &envelope.ActorInfo{
@@ -198,7 +203,7 @@ func (c *Collector) parseEvent(raw []byte) *envelope.Event {
 		Comm:            comm,
 		UID:             rawEvt.Hdr.UID,
 		GID:             rawEvt.Hdr.GID,
-		ProcessStartNS:  rawEvt.Hdr.TimestampNS,
+		ProcessStartNS:  startNS,
 		ProcessEntityID: entityID,
 	}
 
@@ -457,21 +462,6 @@ func (c *Collector) snapshotSEM(ctx context.Context, events chan<- *envelope.Eve
 func (c *Collector) ktimeToWallTime(ktimeNS uint64) time.Time {
 	wallNS := c.bootTimeNS + ktimeNS
 	return time.Unix(0, int64(wallNS)).UTC()
-}
-
-func getBootTimeOffsetNS() uint64 {
-	data, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return uint64(time.Now().UnixNano())
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "btime ") {
-			var btime uint64
-			fmt.Sscanf(line, "btime %d", &btime)
-			return btime * 1_000_000_000
-		}
-	}
-	return uint64(time.Now().UnixNano())
 }
 
 func cString(b []byte) string {

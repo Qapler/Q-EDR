@@ -7,8 +7,21 @@ import (
 	"fmt"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Qapler/Q-EDR/edge-agent/internal/envelope"
 )
+
+// BootTimeOffsetNS returns the wall-clock time of boot in nanoseconds since the
+// Unix epoch, such that wall = offset + bpf_ktime_get_boot_ns(). It is derived
+// from CLOCK_REALTIME - CLOCK_BOOTTIME, which (unlike btime in /proc/stat) has
+// sub-second precision.
+func BootTimeOffsetNS() uint64 {
+	var rt, bt unix.Timespec
+	_ = unix.ClockGettime(unix.CLOCK_REALTIME, &rt)
+	_ = unix.ClockGettime(unix.CLOCK_BOOTTIME, &bt)
+	return uint64(rt.Nano() - bt.Nano())
+}
 
 func fillPlatformInfo(info *envelope.HostInfo) {
 	// Boot ID from /proc/sys/kernel/random/boot_id.

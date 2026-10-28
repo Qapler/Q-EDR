@@ -11,7 +11,7 @@
 // Snapshot collection (/proc):
 //   - /proc/[pid]/stat, status, cmdline, exe → process.snapshot
 //
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64 -type process_exec_event -type process_fork_event -type process_exit_event processProbe ../../bpf/process.bpf.c -- -I../../bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target amd64,arm64 -type process_exec_event -type process_fork_event -type process_exit_event processProbe ../../../bpf/process.bpf.c -- -I../../../bpf
 package process
 
 import (
@@ -61,6 +61,8 @@ type eventHeader struct {
 	TimestampNS uint64
 	CgroupID    uint64
 	Comm        [maxCommLen]byte
+	StartTimeNS       uint64 // group_leader->start_boottime
+	ParentStartTimeNS uint64 // real_parent->start_boottime
 }
 
 type processExecEventRaw struct {
@@ -77,6 +79,7 @@ type processForkEventRaw struct {
 	ChildTID   uint32
 	CloneFlags uint64
 	ChildComm  [maxCommLen]byte
+	ChildStartTimeNS uint64
 }
 
 type processExitEventRaw struct {
@@ -109,7 +112,7 @@ func (c *Collector) Name() string { return "process" }
 
 func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) error {
 	// Calculate boot time offset for timestamp conversion.
-	c.bootTimeNS = getBootTimeOffsetNS()
+	c.bootTimeNS = host.BootTimeOffsetNS()
 
 	// Load the eBPF objects.
 	spec, err := loadProcessProbe()
@@ -123,21 +126,24 @@ func (c *Collector) Start(ctx context.Context, events chan<- *envelope.Event) er
 	}
 
 	// Attach tracepoints.
-	tpExec, err := link.Tracepoint("sched", "sched_process_exec", objs.TracepointSchedSchedProcessExec, nil)
+	tpExec, err := link.Tracepoint("sched", "sched_process_exec", objs.TracepointSchedProcessExec, nil)
 	if err != nil {
 		objs.Close()
 		return fmt.Errorf("attach sched_process_exec: %w", err)
 	}
 	c.links = append(c.links, tpExec)
 
-	tpFork, err := link.Tracepoint("sched", "sched_process_fork", objs.TracepointSchedSchedProcessFork, nil)
+	tpFork, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "sched_process_fork",
+		Program: objs.RawTracepointSchedProcessFork,
+	})
 	if err != nil {
 		log.Printf("[process] warning: could not attach sched_process_fork: %v", err)
 	} else {
 		c.links = append(c.links, tpFork)
 	}
 
-	tpExit, err := link.Tracepoint("sched", "sched_process_exit", objs.TracepointSchedSchedProcessExit, nil)
+	tpExit, err := link.Tracepoint("sched", "sched_process_exit", objs.TracepointSchedProcessExit, nil)
 	if err != nil {
 		log.Printf("[process] warning: could not attach sched_process_exit: %v", err)
 	} else {
@@ -247,7 +253,8 @@ func (c *Collector) parseForkEvent(raw []byte) *envelope.Event {
 		return nil
 	}
 
-	childEntityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(re.ChildPID), re.Hdr.TimestampNS)
+	childEntityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(re.ChildPID),
+		identity.NormalizeStartTimeNS(re.ChildStartTimeNS))
 	data := ForkData{
 		ChildPID:      int32(re.ChildPID),
 		ChildTID:      int32(re.ChildTID),
@@ -301,7 +308,13 @@ func (c *Collector) headerToActor(hdr *eventHeader) *envelope.ActorInfo {
 		cmdline = readProcCmdline(int(hdr.PID))
 	}
 
-	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(hdr.PID), hdr.TimestampNS)
+	startNS := identity.NormalizeStartTimeNS(hdr.StartTimeNS)
+	entityID := identity.GenerateProcessEntityID(c.hostInfo.BootID, int32(hdr.PID), startNS)
+	var parentEntityID string
+	if hdr.PPID > 0 {
+		parentEntityID = identity.GenerateParentEntityID(c.hostInfo.BootID, int32(hdr.PPID),
+			identity.NormalizeStartTimeNS(hdr.ParentStartTimeNS))
+	}
 
 	return &envelope.ActorInfo{
 		PID:             int32(hdr.PID),
@@ -312,8 +325,9 @@ func (c *Collector) headerToActor(hdr *eventHeader) *envelope.ActorInfo {
 		Comm:            comm,
 		Exe:             exe,
 		Cmdline:         cmdline,
-		ProcessStartNS:  hdr.TimestampNS,
+		ProcessStartNS:  startNS,
 		ProcessEntityID: entityID,
+		ParentEntityID:  parentEntityID,
 	}
 }
 
@@ -323,22 +337,6 @@ func (c *Collector) kernelTSToWallClock(bootNS uint64) time.Time {
 	// kernel timestamp = time since boot in nanoseconds.
 	wallNS := c.bootTimeNS + bootNS
 	return time.Unix(0, int64(wallNS)).UTC()
-}
-
-// getBootTimeOffsetNS returns the boot time as nanoseconds since Unix epoch.
-func getBootTimeOffsetNS() uint64 {
-	data, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return uint64(time.Now().UnixNano())
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "btime ") {
-			var btime uint64
-			fmt.Sscanf(line, "btime %d", &btime)
-			return btime * 1_000_000_000
-		}
-	}
-	return uint64(time.Now().UnixNano())
 }
 
 // /proc helpers.
